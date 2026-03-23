@@ -79,8 +79,23 @@ const DB = {
     this._set('users', users);
   },
 
+  updateUser(userId, updates) {
+    const users = this.getUsers();
+    const idx = users.findIndex(u => u.id === userId);
+    if (idx !== -1) {
+      Object.assign(users[idx], updates);
+      this._set('users', users);
+      return users[idx];
+    }
+    return null;
+  },
+
   findUser(email) {
     return this.getUsers().find(u => u.email === email);
+  },
+
+  getUserById(id) {
+    return this.getUsers().find(u => u.id === id);
   },
 
   // Oturum
@@ -119,6 +134,17 @@ const DB = {
     return null;
   },
 
+  deleteJob(jobId) {
+    const jobs = this.getJobs().filter(j => j.id !== jobId);
+    this._set('jobs', jobs);
+    // İlana ait teklifleri de sil
+    const offers = this.getOffers().filter(o => o.jobId !== jobId);
+    this._set('offers', offers);
+    // İlana ait bildirimleri de sil
+    const notifs = this.getNotifications().filter(n => n.jobId !== jobId);
+    this._set('notifications', notifs);
+  },
+
   getJobById(id) {
     return this.getJobs().find(j => j.id === id);
   },
@@ -154,6 +180,86 @@ const DB = {
     return this.getOffers().filter(o => o.carrierId === carrierId);
   },
 
+  // Bildirimler
+  getNotifications() {
+    return this._get('notifications') || [];
+  },
+
+  saveNotification(notif) {
+    const notifs = this.getNotifications();
+    notifs.push(notif);
+    this._set('notifications', notifs);
+    return notif;
+  },
+
+  getNotificationsForUser(userId) {
+    return this.getNotifications()
+      .filter(n => n.userId === userId)
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  },
+
+  markNotificationRead(notifId) {
+    const notifs = this.getNotifications();
+    const idx = notifs.findIndex(n => n.id === notifId);
+    if (idx !== -1) {
+      notifs[idx].read = true;
+      this._set('notifications', notifs);
+    }
+  },
+
+  markAllNotificationsRead(userId) {
+    const notifs = this.getNotifications();
+    notifs.forEach(n => {
+      if (n.userId === userId) n.read = true;
+    });
+    this._set('notifications', notifs);
+  },
+
+  getUnreadCount(userId) {
+    return this.getNotifications().filter(n => n.userId === userId && !n.read).length;
+  },
+
+  // Mesajlar
+  getMessages() {
+    return this._get('messages') || [];
+  },
+
+  saveMessage(msg) {
+    const msgs = this.getMessages();
+    msgs.push(msg);
+    this._set('messages', msgs);
+    return msg;
+  },
+
+  getConversation(user1Id, user2Id) {
+    return this.getMessages().filter(m =>
+      (m.fromId === user1Id && m.toId === user2Id) ||
+      (m.fromId === user2Id && m.toId === user1Id)
+    ).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  },
+
+  getConversationsForUser(userId) {
+    const msgs = this.getMessages().filter(m => m.fromId === userId || m.toId === userId);
+    const partnerIds = new Set();
+    msgs.forEach(m => {
+      partnerIds.add(m.fromId === userId ? m.toId : m.fromId);
+    });
+    return Array.from(partnerIds).map(partnerId => {
+      const convMsgs = this.getConversation(userId, partnerId);
+      const lastMsg = convMsgs[convMsgs.length - 1];
+      const unread = convMsgs.filter(m => m.toId === userId && !m.read).length;
+      return { partnerId, lastMsg, unread };
+    }).sort((a, b) => new Date(b.lastMsg.createdAt) - new Date(a.lastMsg.createdAt));
+  },
+
+  markMessagesRead(fromId, toId) {
+    const msgs = this.getMessages();
+    msgs.forEach(m => {
+      if (m.fromId === fromId && m.toId === toId) m.read = true;
+    });
+    this._set('messages', msgs);
+  },
+
   // Tema
   getTheme() {
     return localStorage.getItem('cl_theme') || 'light';
@@ -171,21 +277,23 @@ const DB = {
     const demoUsers = [
       {
         id: 'u1', name: 'Ahmet Yılmaz', email: 'ahmet@demo.com', password: '123456',
-        phone: '0532 111 22 33', role: 'shipper', company: 'Yılmaz Ticaret A.Ş.'
+        phone: '0532 111 22 33', role: 'shipper', company: 'Yılmaz Ticaret A.Ş.',
+        rating: 4.8, ratingCount: 12
       },
       {
         id: 'u2', name: 'Mehmet Kaya', email: 'mehmet@demo.com', password: '123456',
         phone: '0535 444 55 66', role: 'carrier', company: 'Kaya Nakliyat',
-        plate: '34 ABC 123', vehicle: 'tir'
+        plate: '34 ABC 123', vehicle: 'tir', rating: 4.5, ratingCount: 8
       },
       {
         id: 'u3', name: 'Fatma Demir', email: 'fatma@demo.com', password: '123456',
-        phone: '0542 777 88 99', role: 'shipper', company: 'Demir İnşaat Ltd.'
+        phone: '0542 777 88 99', role: 'shipper', company: 'Demir İnşaat Ltd.',
+        rating: 4.9, ratingCount: 15
       },
       {
         id: 'u4', name: 'Ali Öztürk', email: 'ali@demo.com', password: '123456',
         phone: '0555 333 44 55', role: 'carrier', company: 'Öztürk Lojistik',
-        plate: '06 DEF 456', vehicle: 'kamyon'
+        plate: '06 DEF 456', vehicle: 'kamyon', rating: 4.2, ratingCount: 5
       }
     ];
     this._set('users', demoUsers);
@@ -231,13 +339,56 @@ const DB = {
     ];
     this._set('jobs', demoJobs);
 
-    // Demo teklif
+    // Demo teklifler
     const demoOffers = [
       {
-        id: 'o1', jobId: 'j1', carrierId: 'u2',
+        id: 'o1', jobId: 'j1', carrierId: 'u2', price: 30000, note: 'Frigorifik aracım mevcut, hemen yola çıkabilirim.',
         status: 'pending', createdAt: new Date(now - 3600000).toISOString()
+      },
+      {
+        id: 'o2', jobId: 'j2', carrierId: 'u4', price: 26000, note: 'İzmir-Antalya hattını düzenli yapıyorum.',
+        status: 'pending', createdAt: new Date(now - 3600000 * 3).toISOString()
       }
     ];
     this._set('offers', demoOffers);
+
+    // Demo bildirimler
+    const demoNotifs = [
+      {
+        id: 'n1', userId: 'u1', type: 'new_offer',
+        title: 'Yeni Teklif',
+        message: 'Mehmet Kaya, "Gıda Ürünleri - İstanbul → Ankara" ilanınıza teklif verdi.',
+        jobId: 'j1', read: false,
+        createdAt: new Date(now - 3600000).toISOString()
+      },
+      {
+        id: 'n2', userId: 'u3', type: 'new_offer',
+        title: 'Yeni Teklif',
+        message: 'Ali Öztürk, "İnşaat Malzemesi - İzmir → Antalya" ilanınıza teklif verdi.',
+        jobId: 'j2', read: false,
+        createdAt: new Date(now - 3600000 * 3).toISOString()
+      }
+    ];
+    this._set('notifications', demoNotifs);
+
+    // Demo mesajlar
+    const demoMessages = [
+      {
+        id: 'm1', fromId: 'u2', toId: 'u1', jobId: 'j1',
+        text: 'Merhaba, gıda taşımacılığı ilanınız için teklif verdim. Frigorifik aracım mevcuttur.',
+        read: false, createdAt: new Date(now - 3600000).toISOString()
+      },
+      {
+        id: 'm2', fromId: 'u1', toId: 'u2', jobId: 'j1',
+        text: 'Merhaba Mehmet Bey, teklifiniz için teşekkürler. Aracınızın yaşı ve kapasitesi nedir?',
+        read: true, createdAt: new Date(now - 3000000).toISOString()
+      },
+      {
+        id: 'm3', fromId: 'u2', toId: 'u1', jobId: 'j1',
+        text: '2022 model Volvo FH, 20 ton kapasite. Soğutma sistemi tam çalışır durumda.',
+        read: false, createdAt: new Date(now - 2400000).toISOString()
+      }
+    ];
+    this._set('messages', demoMessages);
   }
 };
